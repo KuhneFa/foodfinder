@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+
+  docker:
+    name: Docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ADMIN_PASSWORD: ci-admin-password-123
+      BASE_URL: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Image bauen
+        run: docker build -t foodfinder .
+
+      - name: Container starten (mit Volume unter /data wie auf Railway)
+        run: |
+          docker volume create ff-data
+          docker run -d --name ff -p 3000:3000 -v ff-data:/data -e ADMIN_PASSWORD foodfinder
+
+      - name: Tests gegen den Container
+        run: npm test
+
+      - name: Daten überleben einen Neustart
+        run: |
+          docker restart ff
+          for i in $(seq 1 30); do curl -sf "$BASE_URL/" > /dev/null && break; sleep 1; done
+          jar=$(mktemp)
+          curl -sf -c "$jar" -H "Origin: $BASE_URL" -H 'Content-Type: application/json' \
+            -d "{\"password\":\"$ADMIN_PASSWORD\"}" "$BASE_URL/api/admin/login" > /dev/null
+          count=$(curl -sf -b "$jar" "$BASE_URL/api/admin/rounds" \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).rounds.length))')
+          echo "Runden nach Neustart: $count"
+          test "$count" -gt 0
+
+      - name: Container-Logs
+        if: always()
+        run: docker logs ff
