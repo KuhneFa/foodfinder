@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="light dark">
+<title>Foodfinder</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+<script src="/common.js"></script>
+<script src="/round.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <span class="brand">🍽️ <span data-i18n="app_name">Foodfinder</span></span>
+  <div class="tools">
+    <select id="lang" aria-label="Language"></select>
+    <button id="theme" type="button" class="icon" data-i18n-aria="theme">◐</button>
+  </div>
+</header>
+<main>
+  <p id="v-loading" class="muted" data-i18n="loading"></p>
+
+  <section id="v-error" hidden>
+    <p id="error-text" class="error"></p>
+  </section>
+
+  <section id="v-join" hidden>
+    <h1 data-i18n="join_title"></h1>
+    <p class="muted" data-i18n="join_text"></p>
+    <form id="join-form" class="stack" autocomplete="off">
+      <label><span data-i18n="pin"></span>
+        <input id="pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="one-time-code">
+      </label>
+      <label><span data-i18n="name"></span>
+        <input id="name" maxlength="30" required autocomplete="given-name">
+      </label>
+      <p id="join-error" class="error" role="alert"></p>
+      <button type="submit" class="primary" data-i18n="join_btn"></button>
+    </form>
+  </section>
+
+  <section id="v-rank" hidden>
+    <p class="eyebrow round-title"></p>
+    <h1 data-i18n="rank_title"></h1>
+    <p class="muted" data-i18n="rank_hint"></p>
+    <ol id="rank-list" class="rank"></ol>
+    <form id="custom-form" class="row">
+      <input id="custom-input" maxlength="40" data-i18n-ph="custom_ph">
+      <button type="submit" data-i18n="add"></button>
+    </form>
+    <p id="rank-error" class="error" role="alert"></p>
+    <label class="stack"><span data-i18n="note_label"></span>
+      <textarea id="note" maxlength="500" rows="3" data-i18n-ph="note_ph"></textarea>
+    </label>
+    <button id="submit-vote" type="button" class="primary" data-i18n="submit"></button>
+  </section>
+
+  <section id="v-results" hidden>
+    <p class="eyebrow round-title"></p>
+    <h1 data-i18n="group_ranking"></h1>
+    <p id="res-status" class="muted"></p>
+    <ol id="res-list" class="results"></ol>
+    <p class="muted small" data-i18n="score_hint"></p>
+
+    <div id="res-custom-wrap" hidden>
+      <h2 data-i18n="custom_ideas"></h2>
+      <ul id="res-custom" class="plain"></ul>
+    </div>
+    <div id="res-notes-wrap" hidden>
+      <h2 data-i18n="notes"></h2>
+      <ul id="res-notes" class="plain"></ul>
+    </div>
+
+    <h2 data-i18n="export_title"></h2>
+    <p class="muted" data-i18n="export_text"></p>
+    <pre id="md" class="md"></pre>
+    <div class="row">
+      <button id="copy-md" type="button" class="primary" data-i18n="copy"></button>
+      <button id="dl-md" type="button" data-i18n="download"></button>
+    </div>
+    <div class="row spaced">
+      <button id="edit-vote" type="button" data-i18n="edit"></button>
+      <button id="refresh" type="button" data-i18n="refresh"></button>
+    </div>
+  </section>
+</main>
+</body>
+</html>

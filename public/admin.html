@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="light dark">
+<title>Foodfinder</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+<script src="/common.js"></script>
+<script src="/admin.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <span class="brand">🍽️ <span data-i18n="app_name">Foodfinder</span></span>
+  <div class="tools">
+    <select id="lang" aria-label="Language"></select>
+    <button id="theme" type="button" class="icon" data-i18n-aria="theme">◐</button>
+  </div>
+</header>
+<main>
+  <p id="v-loading" class="muted" data-i18n="loading"></p>
+
+  <section id="v-login" hidden>
+    <h1 data-i18n="admin_title"></h1>
+    <form id="login-form" class="stack">
+      <label><span data-i18n="password"></span>
+        <input id="password" type="password" required autocomplete="current-password">
+      </label>
+      <p id="login-error" class="error" role="alert"></p>
+      <button type="submit" class="primary" data-i18n="login"></button>
+    </form>
+  </section>
+
+  <section id="v-admin" hidden>
+    <div class="row between">
+      <h1 data-i18n="admin_title"></h1>
+      <button id="logout" type="button" class="small-btn" data-i18n="logout"></button>
+    </div>
+
+    <h2 data-i18n="new_round"></h2>
+    <form id="create-form" class="stack">
+      <label><span data-i18n="round_title"></span>
+        <input id="round-title" maxlength="60" data-i18n-ph="round_title_ph">
+      </label>
+      <p id="create-error" class="error" role="alert"></p>
+      <button type="submit" class="primary" data-i18n="create"></button>
+    </form>
+
+    <div id="created" class="card" hidden>
+      <h3 data-i18n="created_title"></h3>
+      <p class="muted small" data-i18n="created_hint"></p>
+      <p class="kv"><span class="muted" data-i18n="link"></span><code id="c-link"></code></p>
+      <p class="kv"><span class="muted" data-i18n="pin"></span><code id="c-pin" class="pin"></code></p>
+      <div class="row wrap">
+        <a id="c-wa" class="btn primary" target="_blank" rel="noopener noreferrer" data-i18n="share_wa"></a>
+        <button id="c-copy-link" type="button" data-i18n="copy_link"></button>
+        <button id="c-copy-pin" type="button" data-i18n="copy_pin"></button>
+      </div>
+    </div>
+
+    <h2 data-i18n="rounds"></h2>
+    <ul id="rounds" class="plain rounds"></ul>
+  </section>
+</main>
+</body>
+</html>

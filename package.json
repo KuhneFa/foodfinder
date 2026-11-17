@@ -1,0 +1,15 @@
+{
+  "name": "foodfinder",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Gemeinsam herausfinden, worauf alle Lust haben.",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.js",
+    "dev": "ADMIN_PASSWORD=dev-password-123 node --disable-warning=ExperimentalWarning --watch server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test"
+  }
+}
