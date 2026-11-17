@@ -7,14 +7,15 @@ Gemeinsam herausfinden, worauf alle Lust haben.
 3. Jede Person gibt PIN und Namen ein und **zieht die Essen in ihre Reihenfolge**. Man kann bis zu 5 eigene Essen ergänzen und eine Notiz hinterlassen.
 4. Wer abgestimmt hat, sieht die **gemeinsame Rangliste** und bekommt einen **Markdown-Text**, den man in ein Sprachmodell kopiert. Das liefert dann Vorschläge zum Selberkochen und zum Bestellen.
 
-Sprachen: Deutsch, Englisch, Spanisch, Rumänisch. Hell- und Dunkelmodus folgen dem System und lassen sich per ◐ umschalten.
+Sprachen: Deutsch, Englisch, Spanisch, Katalanisch, Rumänisch. Hell- und Dunkelmodus folgen dem System und lassen sich per ◐ umschalten.
 
 ## Lokal starten
 
 Benötigt Node.js ≥ 22.13. Es gibt keine weiteren Abhängigkeiten, ein `npm install` ist nicht nötig.
 
 ```bash
-npm run dev          # Admin-Passwort lokal: dev-password-123
+npm run dev                                   # Admin-Passwort: dev-password-123
+ADMIN_PASSWORD='dein-eigenes-passwort' npm start   # oder mit eigenem Passwort
 ```
 
 Dann http://localhost:3000/admin öffnen.
