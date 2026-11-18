@@ -1,6 +1,6 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { db } from './db.js';
@@ -23,10 +23,16 @@ const ROUND_TTL = 30 * DAY;            // Runden werden nach 30 Tagen gelöscht
 const ADMIN_SESSION_TTL = 12 * 60 * MIN;
 const PIN_MAX_FAILS = 5;               // Fehlversuche pro Runde …
 const PIN_LOCK = 15 * MIN;             // … danach Sperre
-const MAX_PARTICIPANTS = 20;
+const MIN_SIZE = 2;
+const MAX_SIZE = 10;
 const MAX_ROUNDS = 200;
-const MAX_CUSTOM = 5;
-const DEFAULT_FOODS = ['pizza', 'doener', 'pasta', 'burger', 'chinese'];
+const MAX_IDEAS_PER_PERSON = 3;
+const MAX_IDEAS = 10;
+// Muss zu FOODS in public/common.js passen (wird getestet).
+const FOOD_KEYS = [
+  'pizza', 'pasta', 'burger', 'doener', 'chinese', 'indian', 'thai', 'vietnamese',
+  'sushi', 'korean', 'mexican', 'greek', 'lebanese', 'bowl', 'dumplings',
+];
 const TOKEN_RE = /^[A-Za-z0-9_-]{22}$/;
 
 const scrypt = promisify(crypto.scrypt);
@@ -195,6 +201,144 @@ function requireAdmin(req) {
   if (!getSession(readCookies(req).ff_admin, 'admin')) throw new HttpError(401, 'need_login');
 }
 
+// ---------- Spiel-Logik ----------
+// Ablauf: Swipen (alle) → Matches = worauf alle Bock haben → Endrunde (sortieren + 1 Veto) → Ergebnis.
+// Gibt es kein Match, beginnt eine neue Swipe-Runde.
+
+const parse = (s, fallback) => {
+  if (s == null) return fallback;
+  try { return JSON.parse(s); } catch { return fallback; }
+};
+const getRound = (id) => db.prepare('SELECT * FROM rounds WHERE id = ?').get(id);
+const getPeople = (roundId) => db.prepare('SELECT * FROM participants WHERE round_id = ? ORDER BY id').all(roundId);
+const getPerson = (id) => db.prepare('SELECT * FROM participants WHERE id = ?').get(id);
+const deckOf = (round) => [...FOOD_KEYS, ...parse(round.ideas, []).map((i) => i.id)];
+
+function hasSwipedAll(p, deck) {
+  const s = parse(p.swipes, {});
+  return deck.every((k) => Object.hasOwn(s, k));
+}
+function isDone(p, round, deck) {
+  if (round.phase === 'swipe') return hasSwipedAll(p, deck);
+  if (round.phase === 'rank') return p.ranking != null;
+  return true;
+}
+
+function tx(fn) {
+  db.exec('BEGIN');
+  try { fn(); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; }
+}
+
+// Schaltet in die nächste Phase, sobald alle (erwarteten) Personen fertig sind.
+function advance(roundId) {
+  const round = getRound(roundId);
+  if (!round || round.phase === 'done') return;
+  const active = getPeople(roundId).filter((p) => p.active);
+  if (active.length < round.size) return;
+  const deck = deckOf(round);
+  if (!active.every((p) => isDone(p, round, deck))) return;
+
+  if (round.phase === 'rank') {
+    db.prepare("UPDATE rounds SET phase = 'done' WHERE id = ?").run(roundId);
+    return;
+  }
+
+  const swipes = active.map((p) => parse(p.swipes, {}));
+  const matches = deck.filter((k) => swipes.every((s) => s[k] === 1));
+  if (matches.length) {
+    db.prepare('UPDATE rounds SET phase = ?, shortlist = ? WHERE id = ?')
+      .run(matches.length === 1 ? 'done' : 'rank', JSON.stringify(matches), roundId);
+    return;
+  }
+
+  // Kein Match: neue Swipe-Runde. Wer eine eigene Idee hat, hat darauf weiterhin Bock.
+  const tally = Object.fromEntries(deck.map((k) => [k, swipes.filter((s) => s[k] === 1).length]));
+  const ideas = parse(round.ideas, []);
+  tx(() => {
+    db.prepare('UPDATE rounds SET swipe_round = swipe_round + 1, prev_tally = ? WHERE id = ?')
+      .run(JSON.stringify({ tally, voters: active.length }), roundId);
+    for (const p of getPeople(roundId)) {
+      const own = ideas.filter((i) => i.by === p.id).map((i) => [i.id, 1]);
+      db.prepare('UPDATE participants SET swipes = ? WHERE id = ?')
+        .run(own.length ? JSON.stringify(Object.fromEntries(own)) : null, p.id);
+    }
+  });
+}
+
+// Endergebnis: Vetos schließen aus, dann zählt die Platzierung (Borda).
+// Bei Gleichstand entscheidet ein „Würfel“, der für alle gleich ausfällt.
+function computeResult(round) {
+  const shortlist = parse(round.shortlist, []);
+  const rankers = getPeople(round.id).filter((p) => p.active && p.ranking);
+  const n = shortlist.length;
+  const rows = shortlist.map((key) => {
+    const row = { key, score: 0, max: (n - 1) * rankers.length, positions: [], vetoes: [] };
+    for (const p of rankers) {
+      const i = parse(p.ranking, []).indexOf(key);
+      if (i >= 0) {
+        row.score += n - 1 - i;
+        row.positions.push({ name: p.name, pos: i + 1 });
+      }
+      if (p.veto === key) row.vetoes.push(p.name);
+    }
+    return row;
+  });
+  const dice = (key) => sha256hex(`${round.token}:${key}`);
+  rows.sort((a, b) => a.vetoes.length - b.vetoes.length || b.score - a.score || dice(a.key).localeCompare(dice(b.key)));
+  const tie = rows.length > 1 && rows[0].vetoes.length === rows[1].vetoes.length && rows[0].score === rows[1].score;
+  return { order: rows, tie, perfect: n === 1 };
+}
+
+function roundState(round, me) {
+  const people = getPeople(round.id);
+  const deck = deckOf(round);
+  const nameOf = (id) => people.find((p) => p.id === id)?.name ?? '';
+  const state = {
+    title: round.title,
+    size: round.size,
+    phase: round.phase,
+    swipeRound: round.swipe_round,
+    deck,
+    ideas: parse(round.ideas, []).map((i) => ({ id: i.id, label: i.label, by: nameOf(i.by) })),
+    prev: parse(round.prev_tally, null),
+    people: people.map((p) => ({
+      name: p.name,
+      me: p.id === me.id,
+      active: Boolean(p.active),
+      done: Boolean(p.active) && isDone(p, round, deck),
+    })),
+    me: {
+      name: me.name,
+      active: Boolean(me.active),
+      swipes: parse(me.swipes, null),
+      ranking: parse(me.ranking, null),
+      veto: me.veto,
+      note: me.note,
+    },
+    shortlist: round.phase === 'swipe' ? null : parse(round.shortlist, []),
+  };
+  if (round.phase === 'done') {
+    state.result = computeResult(round);
+    state.notes = people.filter((p) => p.active && p.note).map((p) => ({ name: p.name, note: p.note }));
+  }
+  return state;
+}
+
+// Lädt Runde und Person frisch (nach dem Einlesen des Bodys kann sich etwas geändert haben).
+function load(req, roundId) {
+  const round = getRound(roundId);
+  if (!round) throw new HttpError(404, 'not_found');
+  const me = currentParticipant(req, round);
+  if (!me) throw new HttpError(401, 'need_pin');
+  return { round, me };
+}
+function requireActive(me) {
+  if (!me.active) throw new HttpError(403, 'excluded');
+}
+function sendState(res, roundId, meId) {
+  json(res, 200, roundState(getRound(roundId), getPerson(meId)));
+}
+
 // ---------- Admin ----------
 async function adminLogin(req, res, ip) {
   if (hit(`alogin:${ip}`, 10, 15 * MIN) || over('alogin-fail', 30)) throw new HttpError(429, 'rate_limited');
@@ -215,25 +359,42 @@ function adminLogout(req, res) {
 }
 
 function listRounds(res) {
-  const rounds = db.prepare(`
-    SELECT r.id, r.token, r.title, r.created_at,
-           COUNT(p.id) AS total, COUNT(p.ranking) AS voted
-    FROM rounds r LEFT JOIN participants p ON p.round_id = r.id
-    GROUP BY r.id ORDER BY r.created_at DESC`).all()
-    .map((r) => ({ ...r, expires_at: r.created_at + ROUND_TTL }));
+  const rounds = db.prepare('SELECT * FROM rounds ORDER BY created_at DESC').all().map((r) => {
+    const deck = deckOf(r);
+    const people = getPeople(r.id);
+    let winner = null;
+    if (r.phase === 'done') {
+      const key = computeResult(r).order[0]?.key;
+      if (key) winner = { key, label: parse(r.ideas, []).find((i) => i.id === key)?.label ?? null };
+    }
+    return {
+      id: r.id,
+      token: r.token,
+      title: r.title,
+      created_at: r.created_at,
+      expires_at: r.created_at + ROUND_TTL,
+      size: r.size,
+      phase: r.phase,
+      joined: people.length,
+      done: people.filter((p) => p.active && isDone(p, r, deck)).length,
+      winner,
+    };
+  });
   json(res, 200, { rounds });
 }
 
 async function createRound(req, res) {
   const body = await readJson(req);
   const title = cleanLine(body.title, 60);
+  const size = body.size ?? 3;
+  if (!Number.isInteger(size) || size < MIN_SIZE || size > MAX_SIZE) throw new HttpError(400, 'invalid');
   const { n } = db.prepare('SELECT COUNT(*) AS n FROM rounds').get();
   if (n >= MAX_ROUNDS) throw new HttpError(409, 'too_many_rounds');
   const token = crypto.randomBytes(16).toString('base64url');
   const pin = newPin();
-  const { lastInsertRowid } = db.prepare('INSERT INTO rounds (token, title, pin_hash, created_at) VALUES (?, ?, ?, ?)')
-    .run(token, title, await hashPin(pin), Date.now());
-  json(res, 201, { id: Number(lastInsertRowid), token, pin, title });
+  const { lastInsertRowid } = db.prepare('INSERT INTO rounds (token, title, pin_hash, created_at, size) VALUES (?, ?, ?, ?, ?)')
+    .run(token, title, await hashPin(pin), Date.now(), size);
+  json(res, 201, { id: Number(lastInsertRowid), token, pin, title, size });
 }
 
 async function resetPin(res, id) {
@@ -250,16 +411,13 @@ function deleteRound(res, id) {
 }
 
 // ---------- Teilnehmer ----------
-function parsedRanking(p) { return p.ranking ? JSON.parse(p.ranking) : null; }
-
-function roundState(req, res, round) {
-  const me = currentParticipant(req, round);
-  if (!me) throw new HttpError(401, 'need_pin');
-  json(res, 200, { title: round.title, me: { name: me.name, ranking: parsedRanking(me), note: me.note } });
+function getState(req, res, roundId) {
+  const { round, me } = load(req, roundId);
+  json(res, 200, roundState(round, me));
 }
 
-async function join(req, res, round, ip) {
-  if (hit(`join:${ip}`, 20, 15 * MIN)) throw new HttpError(429, 'rate_limited');
+async function join(req, res, roundId, ip) {
+  if (hit(`join:${ip}`, 40, 15 * MIN)) throw new HttpError(429, 'rate_limited');
   const body = await readJson(req);
   const name = cleanLine(body.name, 30);
   if (!name) throw new HttpError(400, 'name_required');
@@ -267,89 +425,146 @@ async function join(req, res, round, ip) {
   // Prüfen + Zählen passiert synchron vor dem (asynchronen) Hash-Vergleich,
   // damit parallele Anfragen die Sperre nicht umgehen können.
   const now = Date.now();
-  const r = db.prepare('SELECT fail_count, locked_until, pin_hash FROM rounds WHERE id = ?').get(round.id);
+  const r = getRound(roundId);
+  if (!r) throw new HttpError(404, 'not_found');
   if (r.locked_until > now) throw new HttpError(429, 'locked');
   if (r.fail_count >= PIN_MAX_FAILS) {
-    db.prepare('UPDATE rounds SET fail_count = 0, locked_until = ? WHERE id = ?').run(now + PIN_LOCK, round.id);
+    db.prepare('UPDATE rounds SET fail_count = 0, locked_until = ? WHERE id = ?').run(now + PIN_LOCK, roundId);
     throw new HttpError(429, 'locked');
   }
-  db.prepare('UPDATE rounds SET fail_count = fail_count + 1 WHERE id = ?').run(round.id);
+  db.prepare('UPDATE rounds SET fail_count = fail_count + 1 WHERE id = ?').run(roundId);
 
   const pin = typeof body.pin === 'string' ? body.pin.trim() : '';
   const ok = /^\d{6}$/.test(pin) && await verifyPin(pin, r.pin_hash);
+  const round = getRound(roundId);
+  if (!round) throw new HttpError(404, 'not_found');
   if (!ok) {
-    const { fail_count } = db.prepare('SELECT fail_count FROM rounds WHERE id = ?').get(round.id) || {};
-    if (fail_count >= PIN_MAX_FAILS) {
-      db.prepare('UPDATE rounds SET fail_count = 0, locked_until = ? WHERE id = ?').run(Date.now() + PIN_LOCK, round.id);
+    if (round.fail_count >= PIN_MAX_FAILS) {
+      db.prepare('UPDATE rounds SET fail_count = 0, locked_until = ? WHERE id = ?').run(Date.now() + PIN_LOCK, roundId);
       throw new HttpError(429, 'locked');
     }
     throw new HttpError(403, 'bad_pin');
   }
-  db.prepare('UPDATE rounds SET fail_count = 0 WHERE id = ?').run(round.id);
+  db.prepare('UPDATE rounds SET fail_count = 0 WHERE id = ?').run(roundId);
 
-  const { n } = db.prepare('SELECT COUNT(*) AS n FROM participants WHERE round_id = ?').get(round.id);
-  if (n >= MAX_PARTICIPANTS) throw new HttpError(403, 'full');
+  const { n } = db.prepare('SELECT COUNT(*) AS n FROM participants WHERE round_id = ?').get(roundId);
+  if (n >= round.size) throw new HttpError(403, 'full');
 
   let participantId;
   try {
-    participantId = Number(db.prepare('INSERT INTO participants (round_id, name) VALUES (?, ?)').run(round.id, name).lastInsertRowid);
+    participantId = Number(db.prepare('INSERT INTO participants (round_id, name) VALUES (?, ?)').run(roundId, name).lastInsertRowid);
   } catch (e) {
     if (String(e.message).includes('UNIQUE')) throw new HttpError(409, 'name_taken');
     throw e;
   }
   const ttl = round.created_at + ROUND_TTL - Date.now();
-  const token = createSession('p', round.id, participantId, ttl);
+  const token = createSession('p', roundId, participantId, ttl);
   json(res, 200, { ok: true }, { 'Set-Cookie': cookie(req, participantCookie(round), token, ttl) });
 }
 
-async function vote(req, res, round) {
-  const me = currentParticipant(req, round);
-  if (!me) throw new HttpError(401, 'need_pin');
+async function saveSwipes(req, res, roundId) {
   const body = await readJson(req);
-  const list = body.ranking;
-  if (!Array.isArray(list) || list.length > DEFAULT_FOODS.length + MAX_CUSTOM) throw new HttpError(400, 'invalid');
+  const { round, me } = load(req, roundId);
+  requireActive(me);
+  if (round.phase !== 'swipe') throw new HttpError(409, 'wrong_phase');
 
-  const seen = new Set();
-  const ranking = [];
-  let custom = 0;
-  for (const item of list) {
-    if (item && typeof item.k === 'string' && DEFAULT_FOODS.includes(item.k)) {
-      if (seen.has(`k:${item.k}`)) throw new HttpError(400, 'invalid');
-      seen.add(`k:${item.k}`);
-      ranking.push({ k: item.k });
-    } else if (item && typeof item.c === 'string') {
-      const c = cleanLine(item.c, 40);
-      if (!c || seen.has(`c:${c.toLowerCase()}`)) throw new HttpError(400, 'invalid');
-      seen.add(`c:${c.toLowerCase()}`);
-      ranking.push({ c });
-      custom++;
-    } else {
-      throw new HttpError(400, 'invalid');
-    }
+  const deck = new Set(deckOf(round));
+  const input = body.swipes;
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length > deck.size) {
+    throw new HttpError(400, 'invalid');
   }
-  if (custom > MAX_CUSTOM || DEFAULT_FOODS.some((k) => !seen.has(`k:${k}`))) throw new HttpError(400, 'invalid');
-
-  const note = cleanText(body.note, 500);
-  db.prepare('UPDATE participants SET ranking = ?, note = ?, updated_at = ? WHERE id = ?')
-    .run(JSON.stringify(ranking), note, Date.now(), me.id);
-  json(res, 200, { ok: true });
+  const swipes = parse(me.swipes, {});
+  for (const [k, v] of Object.entries(input)) {
+    if (!deck.has(k) || typeof v !== 'boolean') throw new HttpError(400, 'invalid');
+    swipes[k] = v ? 1 : 0;
+  }
+  const note = body.note === undefined ? me.note : cleanText(body.note, 300);
+  db.prepare('UPDATE participants SET swipes = ?, note = ?, updated_at = ? WHERE id = ?')
+    .run(JSON.stringify(swipes), note, Date.now(), me.id);
+  advance(roundId);
+  sendState(res, roundId, me.id);
 }
 
-function results(req, res, round) {
-  const me = currentParticipant(req, round);
-  if (!me) throw new HttpError(401, 'need_pin');
-  if (!me.ranking) throw new HttpError(403, 'vote_first');
-  const participants = db.prepare('SELECT id, name, ranking, note FROM participants WHERE round_id = ? ORDER BY id')
-    .all(round.id)
-    .map((p) => ({ name: p.name, me: p.id === me.id, ranking: parsedRanking(p), note: p.note }));
-  json(res, 200, { title: round.title, participants });
+async function addIdea(req, res, roundId) {
+  const body = await readJson(req);
+  const { round, me } = load(req, roundId);
+  requireActive(me);
+  if (round.phase !== 'swipe') throw new HttpError(409, 'wrong_phase');
+
+  const label = cleanLine(body.label, 40);
+  if (!label) throw new HttpError(400, 'invalid');
+  const ideas = parse(round.ideas, []);
+  if (ideas.length >= MAX_IDEAS || ideas.filter((i) => i.by === me.id).length >= MAX_IDEAS_PER_PERSON) {
+    throw new HttpError(409, 'idea_limit');
+  }
+  if (ideas.some((i) => i.label.toLowerCase() === label.toLowerCase())) throw new HttpError(409, 'duplicate');
+
+  const id = `c${ideas.reduce((max, i) => Math.max(max, Number(i.id.slice(1))), 0) + 1}`;
+  ideas.push({ id, label, by: me.id });
+  const swipes = parse(me.swipes, {});
+  swipes[id] = 1; // wer eine Idee einbringt, hat darauf Bock
+  tx(() => {
+    db.prepare('UPDATE rounds SET ideas = ? WHERE id = ?').run(JSON.stringify(ideas), roundId);
+    db.prepare('UPDATE participants SET swipes = ? WHERE id = ?').run(JSON.stringify(swipes), me.id);
+  });
+  sendState(res, roundId, me.id);
+}
+
+async function saveRanking(req, res, roundId) {
+  const body = await readJson(req);
+  const { round, me } = load(req, roundId);
+  requireActive(me);
+  if (round.phase !== 'rank') throw new HttpError(409, 'wrong_phase');
+
+  const shortlist = parse(round.shortlist, []);
+  const { ranking } = body;
+  const veto = body.veto ?? null;
+  const valid = Array.isArray(ranking)
+    && ranking.length === shortlist.length
+    && new Set(ranking).size === ranking.length
+    && ranking.every((k) => shortlist.includes(k))
+    && (veto === null || shortlist.includes(veto));
+  if (!valid) throw new HttpError(400, 'invalid');
+
+  db.prepare('UPDATE participants SET ranking = ?, veto = ?, updated_at = ? WHERE id = ?')
+    .run(JSON.stringify(ranking), veto, Date.now(), me.id);
+  advance(roundId);
+  sendState(res, roundId, me.id);
+}
+
+// „Nicht mehr warten“: Wer noch nicht fertig (oder gar nicht da) ist, wird übersprungen.
+function skip(req, res, roundId) {
+  const { round, me } = load(req, roundId);
+  requireActive(me);
+  if (round.phase === 'done') throw new HttpError(409, 'wrong_phase');
+  const deck = deckOf(round);
+  const active = getPeople(roundId).filter((p) => p.active);
+  const done = active.filter((p) => isDone(p, round, deck));
+  if (done.length < 2 || !done.some((p) => p.id === me.id)) throw new HttpError(409, 'skip');
+  tx(() => {
+    for (const p of active) {
+      if (!done.includes(p)) db.prepare('UPDATE participants SET active = 0 WHERE id = ?').run(p.id);
+    }
+    db.prepare('UPDATE rounds SET size = ? WHERE id = ?').run(done.length, roundId);
+  });
+  advance(roundId);
+  sendState(res, roundId, me.id);
 }
 
 // ---------- API-Routing ----------
+const ROUND_ROUTES = {
+  'GET state': getState,
+  'POST join': join,
+  'PUT swipes': saveSwipes,
+  'POST ideas': addIdea,
+  'PUT ranking': saveRanking,
+  'POST skip': skip,
+};
+
 async function api(req, res, p) {
   const ip = clientIp(req);
   const m = req.method;
-  if (hit(`api:${ip}`, 300, 5 * MIN)) throw new HttpError(429, 'rate_limited');
+  if (hit(`api:${ip}`, 1200, 5 * MIN)) throw new HttpError(429, 'rate_limited');
   if (m !== 'GET') checkOrigin(req);
 
   if (p === '/api/admin/login' && m === 'POST') return adminLogin(req, res, ip);
@@ -364,18 +579,15 @@ async function api(req, res, p) {
     throw new HttpError(404, 'not_found');
   }
 
-  const g = p.match(/^\/api\/r\/([A-Za-z0-9_-]{22})\/(state|join|vote|results)$/);
+  const g = p.match(/^\/api\/r\/([A-Za-z0-9_-]{22})\/([a-z]+)$/);
   if (g) {
-    const round = db.prepare('SELECT * FROM rounds WHERE token = ?').get(g[1]);
+    const round = db.prepare('SELECT id, created_at FROM rounds WHERE token = ?').get(g[1]);
     if (!round || round.created_at + ROUND_TTL < Date.now()) {
       if (hit(`miss:${ip}`, 20, 15 * MIN)) throw new HttpError(429, 'rate_limited');
       throw new HttpError(404, 'not_found');
     }
-    const action = g[2];
-    if (action === 'state' && m === 'GET') return roundState(req, res, round);
-    if (action === 'join' && m === 'POST') return join(req, res, round, ip);
-    if (action === 'vote' && m === 'PUT') return vote(req, res, round);
-    if (action === 'results' && m === 'GET') return results(req, res, round);
+    const handler = ROUND_ROUTES[`${m} ${g[2]}`];
+    if (handler) return handler(req, res, round.id, ip);
   }
   throw new HttpError(404, 'not_found');
 }
@@ -388,23 +600,32 @@ const TYPES = {
   '.js': 'text/javascript; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.txt': 'text/plain; charset=utf-8',
+  '.jpg': 'image/jpeg',
 };
-const FILES = new Map(readdirSync(PUBLIC_DIR).map((f) => [
-  f, { body: readFileSync(path.join(PUBLIC_DIR, f)), type: TYPES[path.extname(f)] || 'application/octet-stream' },
-]));
+const FILES = new Map();
+function addFiles(dir, prefix) {
+  if (!existsSync(dir)) return;
+  for (const f of readdirSync(dir, { withFileTypes: true })) {
+    if (!f.isFile() || !TYPES[path.extname(f.name)]) continue;
+    FILES.set(prefix + f.name, { body: readFileSync(path.join(dir, f.name)), type: TYPES[path.extname(f.name)] });
+  }
+}
+addFiles(PUBLIC_DIR, '');
+addFiles(path.join(PUBLIC_DIR, 'img'), 'img/');
 
 function serveStatic(req, res, p) {
   let name = null;
   if (p === '/') name = 'index.html';
   else if (p === '/admin') name = 'admin.html';
   else if (p.startsWith('/r/') && TOKEN_RE.test(p.slice(3))) name = 'round.html';
-  else if (/^\/[a-z0-9-]+\.(css|js|svg|txt)$/.test(p)) name = p.slice(1);
+  else if (/^\/[a-z0-9-]+\.(css|js|svg|txt)$/.test(p) || /^\/img\/[a-z0-9-]+\.jpg$/.test(p)) name = p.slice(1);
   const file = name && FILES.get(name);
   if (!file) {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     return res.end('Not found');
   }
-  res.writeHead(200, { 'Content-Type': file.type, 'Cache-Control': 'no-cache' });
+  const cache = name.startsWith('img/') ? 'public, max-age=86400' : 'no-cache';
+  res.writeHead(200, { 'Content-Type': file.type, 'Cache-Control': cache });
   res.end(req.method === 'HEAD' ? undefined : file.body);
 }
 

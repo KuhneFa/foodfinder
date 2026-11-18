@@ -1,11 +1,14 @@
 # 🍽️ Foodfinder
 
-Gemeinsam herausfinden, worauf alle Lust haben.
+Swipen. Matchen. Essen. In einer Minute herausfinden, worauf die ganze Gruppe Bock hat.
 
-1. Du legst unter `/admin` eine **Runde** an und bekommst einen geheimen Link und eine 6-stellige PIN.
-2. Du schickst den Link (z. B. per WhatsApp) an die Gruppe, die PIN am besten separat.
-3. Jede Person gibt PIN und Namen ein und **zieht die Essen in ihre Reihenfolge**. Man kann bis zu 5 eigene Essen ergänzen und eine Notiz hinterlassen.
-4. Wer abgestimmt hat, sieht die **gemeinsame Rangliste** und bekommt einen **Markdown-Text**, den man in ein Sprachmodell kopiert. Das liefert dann Vorschläge zum Selberkochen und zum Bestellen.
+1. Du legst unter `/admin` eine **Runde** an, gibst an, **wie viele ihr seid**, und bekommst einen geheimen Link und eine 6-stellige PIN. Teilen geht über das Teilen-Menü des Handys (z. B. WhatsApp).
+2. Jede Person gibt PIN und Namen ein und **swipt durch 15 Küchen**: rechts = Bock, links = nö. Am Ende kann man bis zu 3 eigene Ideen einbringen, die dann alle anderen auch swipen, und eine Notiz (Allergien, No-Gos) hinterlassen.
+3. Sobald alle fertig sind, gibt es die **Matches**: Küchen, auf die *alle* Bock haben. Gibt es keins, startet eine neue Swipe-Runde, und es wird angezeigt, was knapp war. Bei genau einem Match steht das Ergebnis sofort fest.
+4. In der **Endrunde** sortiert jede Person die Matches. Jede Person hat **ein Veto**: Was vetoiert wird, kann nicht gewinnen.
+5. **Ergebnis:** Der Gewinner wird groß angezeigt, dazu Plan B und C. Dann gibt man noch den Ort ein („📍 Wo seid ihr?“, bleibt nur im Browser) und kopiert einen fertigen **KI-Prompt** in Claude oder ChatGPT. Er fragt nach Restaurants in der Nähe, die gerade liefern, und nach schnellen Rezepten zum Selberkochen.
+
+Die Seite aktualisiert sich während des Wartens selbst. Hängt jemand, kann man nach 20 Sekunden ohne diese Person weitermachen.
 
 Sprachen: Deutsch, Englisch, Spanisch, Katalanisch, Rumänisch. Hell- und Dunkelmodus folgen dem System und lassen sich per ◐ umschalten.
 
@@ -53,7 +56,11 @@ Die CI (GitHub Actions) führt die Tests bei jedem Push aus, einmal direkt und e
 
 ### Grenzen
 
-Max. 20 Teilnehmer pro Runde, 5 eigene Essen pro Person, 200 Runden insgesamt.
+2–10 Personen pro Runde, 3 eigene Ideen pro Person (10 pro Runde), 200 Runden insgesamt.
+
+## Fotos
+
+Jede Küche zeigt das Foto `public/img/<küche>.jpg` (z. B. `public/img/thai.jpg`, Hochformat 2:3, z. B. 720×1080). Die Namen stehen in `FOODS` in `public/common.js`. Fehlt ein Foto, zeigt die Karte stattdessen ein großes Emoji. Nach dem Austauschen von Fotos den Server neu starten. Bildnachweise stehen in [CREDITS.md](CREDITS.md).
 
 ## Aufbau
 
@@ -62,9 +69,10 @@ server.js        HTTP-Server, API, Sicherheit (nur Node-Bordmittel)
 db.js            SQLite-Schema (node:sqlite)
 public/
   common.js      Übersetzungen, Theme, Hilfsfunktionen
-  round.js       Teilnehmerseite: Beitreten, Rangliste, Auswertung, Export
+  round.js       Teilnehmerseite: Beitreten, Swipen, Endrunde, Ergebnis, KI-Prompt
   admin.js       Verwaltung
   *.html, style.css
+  img/           Fotos der Küchen
 test/            API-Tests (node:test)
 Dockerfile       für Railway
 .github/         CI-Workflow

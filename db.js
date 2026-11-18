@@ -18,14 +18,23 @@ db.exec(`
     pin_hash     TEXT    NOT NULL,
     created_at   INTEGER NOT NULL,
     fail_count   INTEGER NOT NULL DEFAULT 0,
-    locked_until INTEGER NOT NULL DEFAULT 0
+    locked_until INTEGER NOT NULL DEFAULT 0,
+    size         INTEGER NOT NULL DEFAULT 3,       -- erwartete Gruppengröße
+    phase        TEXT    NOT NULL DEFAULT 'swipe', -- swipe | rank | done
+    swipe_round  INTEGER NOT NULL DEFAULT 1,       -- zählt hoch, wenn es kein Match gab
+    ideas        TEXT    NOT NULL DEFAULT '[]',    -- eigene Ideen [{ id, label, by }]
+    shortlist    TEXT,                             -- Matches (JSON), sobald alle geswipt haben
+    prev_tally   TEXT                              -- Ergebnis der letzten Swipe-Runde ohne Match
   );
 
   CREATE TABLE IF NOT EXISTS participants (
     id         INTEGER PRIMARY KEY,
     round_id   INTEGER NOT NULL REFERENCES rounds(id) ON DELETE CASCADE,
     name       TEXT    NOT NULL,
-    ranking    TEXT,
+    active     INTEGER NOT NULL DEFAULT 1,         -- 0 = per „Nicht mehr warten“ übersprungen
+    swipes     TEXT,                               -- { key: 1 | 0 }
+    ranking    TEXT,                               -- [key, …] in der Endrunde
+    veto       TEXT,
     note       TEXT    NOT NULL DEFAULT '',
     updated_at INTEGER
   );
@@ -40,3 +49,35 @@ db.exec(`
     expires_at     INTEGER NOT NULL
   );
 `);
+
+// ---------- Migration von Version 1 (Rangliste statt Swipen) ----------
+function addColumns(table, defs) {
+  const have = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  for (const [name, def] of Object.entries(defs)) {
+    if (!have.includes(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
+  }
+}
+addColumns('rounds', {
+  size: 'INTEGER NOT NULL DEFAULT 3',
+  phase: "TEXT NOT NULL DEFAULT 'swipe'",
+  swipe_round: 'INTEGER NOT NULL DEFAULT 1',
+  ideas: "TEXT NOT NULL DEFAULT '[]'",
+  shortlist: 'TEXT',
+  prev_tally: 'TEXT',
+});
+addColumns('participants', {
+  active: 'INTEGER NOT NULL DEFAULT 1',
+  swipes: 'TEXT',
+  veto: 'TEXT',
+});
+
+if (db.prepare('PRAGMA user_version').get().user_version < 2) {
+  // Ranglisten aus Version 1 haben ein anderes Format: zurücksetzen,
+  // die Gruppengröße alter Runden aus der Teilnehmerzahl ableiten.
+  db.exec(`
+    UPDATE participants SET ranking = NULL;
+    UPDATE rounds SET size = MAX(2, MIN(10,
+      (SELECT COUNT(*) FROM participants p WHERE p.round_id = rounds.id)));
+    PRAGMA user_version = 2;
+  `);
+}
