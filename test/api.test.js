@@ -14,10 +14,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const PASSWORD = process.env.ADMIN_PASSWORD || 'test-password-123';
-const FOOD_KEYS = [
-  'pizza', 'pasta', 'burger', 'doener', 'chinese', 'indian', 'thai', 'vietnamese',
-  'sushi', 'korean', 'mexican', 'greek', 'lebanese', 'bowl', 'dumplings',
-];
 let BASE = process.env.BASE_URL;
 let proc;
 let dataDir;
@@ -88,7 +84,7 @@ async function adminClient() {
 
 async function newRound(body = {}) {
   const admin = await adminClient();
-  const r = await admin('POST', '/api/admin/rounds', { title: 'Test', size: 3, ...body });
+  const r = await admin('POST', '/api/admin/rounds', { title: 'Test', location: 'Kreuzberg', size: 3, ...body });
   assert.equal(r.status, 201, JSON.stringify(r.data));
   return r.data;
 }
@@ -100,11 +96,10 @@ async function joinAs(round, name) {
   return c;
 }
 
-// Swipt das komplette aktuelle Deck: Bock auf alles in `yes`, sonst nö.
-async function swipe(c, round, yes, extra = {}) {
-  const { deck } = (await c('GET', `/api/r/${round.token}/state`)).data;
-  const swipes = Object.fromEntries(deck.map((k) => [k, yes.includes(k)]));
-  const r = await c('PUT', `/api/r/${round.token}/swipes`, { swipes, ...extra });
+const vote = (v = {}) => ({ wish: '', tastes: {}, spice: null, temp: null, diet: 'alles', budget: 20, nogo: [], nogoCustom: [], ...v });
+
+async function castVote(c, round, v, lang = 'de') {
+  const r = await c('PUT', `/api/r/${round.token}/vote?lang=${lang}`, { vote: vote(v) });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   return r.data;
 }
@@ -120,12 +115,7 @@ test('Seiten und statische Dateien mit Sicherheits-Headern', async () => {
     assert.equal(res.headers.get('referrer-policy'), 'no-referrer');
     assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
   }
-  for (const key of FOOD_KEYS) {
-    const res = await fetch(`${BASE}/img/${key}.jpg`);
-    assert.equal(res.status, 200, `Foto für ${key} fehlt`);
-    assert.equal(res.headers.get('content-type'), 'image/jpeg');
-  }
-  for (const p of ['/server.js', '/db.js', '/package.json', '/r/zu-kurz', '/%2e%2e/server.js', '/img/gibtsnicht.jpg', '/img/../server.js']) {
+  for (const p of ['/server.js', '/db.js', '/prompt.js', '/llm.js', '/package.json', '/r/zu-kurz', '/%2e%2e/server.js']) {
     assert.equal((await fetch(BASE + p)).status, 404, p);
   }
 });
@@ -146,18 +136,21 @@ test('Admin-Login: falsches Passwort, fremder Origin, Logout', async () => {
   assert.equal((await c('GET', '/api/admin/rounds')).status, 401);
 });
 
-test('Gruppengröße wird geprüft', async () => {
+test('Runde anlegen: Ort ist Pflicht, Gruppengröße wird geprüft', async () => {
   const admin = await adminClient();
+  assert.equal((await admin('POST', '/api/admin/rounds', { size: 3 })).data.error, 'location_required');
+  assert.equal((await admin('POST', '/api/admin/rounds', { location: ' ', size: 3 })).data.error, 'location_required');
   for (const size of [1, 11, 2.5, '3']) {
-    assert.equal((await admin('POST', '/api/admin/rounds', { size })).status, 400, String(size));
+    assert.equal((await admin('POST', '/api/admin/rounds', { location: 'Mitte', size })).status, 400, String(size));
   }
-  const r = await admin('POST', '/api/admin/rounds', {});
+  const r = await admin('POST', '/api/admin/rounds', { location: 'Mitte' });
   assert.equal(r.data.size, 3);
+  assert.equal(r.data.location, 'Mitte');
 });
 
-test('Kompletter Ablauf: Swipen, Match, Endrunde mit Veto, Ergebnis', async () => {
+test('Kompletter Ablauf: Wunsch, Geschmack, Gruppenprofil, Masterprompt', async () => {
   const admin = await adminClient();
-  const round = await newRound({ title: 'Sonntag', size: 3 });
+  const round = await newRound({ title: 'Sonntag', location: 'Kreuzberg, Oranienstraße', size: 3 });
   const r = `/api/r/${round.token}`;
 
   const anna = await joinAs(round, 'Anna');
@@ -165,72 +158,78 @@ test('Kompletter Ablauf: Swipen, Match, Endrunde mit Veto, Ergebnis', async () =
   assert.equal((await client()('POST', `${r}/join`, { pin: round.pin, name: 'anna' })).data.error, 'name_taken');
 
   let s = (await anna('GET', `${r}/state`)).data;
-  assert.equal(s.title, 'Sonntag');
-  assert.equal(s.phase, 'swipe');
-  assert.equal(s.size, 3);
-  assert.deepEqual(s.deck, FOOD_KEYS);
-  assert.equal(s.me.swipes, null);
-  assert.equal(s.people.length, 2);
+  assert.equal(s.phase, 'vote');
+  assert.equal(s.location, 'Kreuzberg, Oranienstraße');
+  assert.equal(s.me.vote, null);
+  assert.equal(s.ai.default, 'claude');
+  assert.equal(s.ai.connected, false);
+  assert.equal(s.result, undefined);
 
-  // ungültige Swipes
-  for (const swipes of [{ unbekannt: true }, { pizza: 'ja' }, [], 'kaputt', null]) {
-    assert.equal((await anna('PUT', `${r}/swipes`, { swipes })).status, 400, JSON.stringify(swipes));
+  // ungültige Stimmen
+  for (const v of [
+    { tastes: { scharf: 1 } },          // Schärfe ist eine eigene Frage
+    { tastes: { frisch: 3 } },
+    { spice: 'sehr' },
+    { temp: 'lauwarm' },
+    { diet: 'paleo' },
+    { budget: 7 }, { budget: 41 }, { budget: '20' }, { budget: 12.5 },
+    { nogo: ['pilze', 'pilze'] }, { nogo: ['brokkoli'] },
+    { nogoCustom: ['a', 'b', 'c', 'd', 'e', 'f'] }, { nogoCustom: [''] }, { nogoCustom: ['x'.repeat(31)] },
+    { wish: 'x'.repeat(41) },
+  ]) {
+    const res = await anna('PUT', `${r}/vote`, { vote: vote(v) });
+    assert.equal(res.status, 400, JSON.stringify(v));
   }
-  assert.equal((await anna('PUT', `${r}/ranking`, { ranking: [] })).data.error, 'wrong_phase');
+  assert.equal((await anna('PUT', `${r}/vote`, { vote: 'kaputt' })).status, 400);
 
-  // Anna swipt und bringt danach eine eigene Idee ein (darauf hat sie automatisch Bock)
-  s = await swipe(anna, round, ['thai', 'indian', 'pizza'], { note: '  Keine\u0007 Pilze ' });
-  assert.equal(s.phase, 'swipe');
-  s = (await anna('POST', `${r}/ideas`, { label: 'Ramen' })).data;
-  assert.deepEqual(s.ideas, [{ id: 'c1', label: 'Ramen', by: 'Anna' }]);
-  assert.equal(s.me.swipes.c1, 1);
-  assert.equal((await ben('POST', `${r}/ideas`, { label: 'ramen' })).data.error, 'duplicate');
-  assert.equal((await ben('POST', `${r}/ideas`, { label: 'x'.repeat(41) })).data.error, 'too_long');
+  // Mit Wunsch werden Geschmack, Schärfe und Temperatur ignoriert
+  s = await castVote(anna, round, { wish: 'Pizza "Diavola"', tastes: { cremig: 2 }, spice: 'scharf', temp: 'kalt', budget: 25 });
+  assert.deepEqual(s.me.vote, vote({ wish: 'Pizza "Diavola"', budget: 25 }));
+  assert.equal(s.phase, 'vote');
+  assert.deepEqual(s.people.map((p) => [p.name, p.done]), [['Anna', true], ['Ben', false]]);
 
-  // Ben swipt inklusive Idee; Cem kommt dazu, danach ist die Runde voll
-  await swipe(ben, round, ['thai', 'pizza', 'c1', 'sushi']);
+  // Stimme ändern geht, solange abgestimmt wird
+  s = await castVote(anna, round, { wish: 'Pizza', budget: 25, nogoCustom: ['Sushi', 'sushi'] });
+  assert.deepEqual(s.me.vote.nogoCustom, ['Sushi']);
+
+  await castVote(ben, round, {
+    tastes: { frisch: 2, cremig: 1 }, spice: 'mild', temp: 'heiss', diet: 'vegetarisch', budget: 15, nogo: ['pilze'],
+  });
   const cem = await joinAs(round, 'Cem');
   assert.equal((await client()('POST', `${r}/join`, { pin: round.pin, name: 'Dora' })).data.error, 'full');
-  s = (await anna('GET', `${r}/state`)).data;
-  assert.deepEqual(s.people.map((p) => [p.name, p.done]), [['Anna', true], ['Ben', true], ['Cem', false]]);
+  s = await castVote(cem, round, { tastes: { frisch: 1, herzhaft: 1 }, spice: 'scharf', temp: 'heiss', budget: 40 });
 
-  // Cem swipt als Letzter → Matches = worauf alle Bock haben
-  s = await swipe(cem, round, ['thai', 'pizza', 'c1', 'indian']);
-  assert.equal(s.phase, 'rank');
-  assert.deepEqual(s.shortlist, ['pizza', 'thai', 'c1']);
-  assert.equal((await cem('PUT', `${r}/swipes`, { swipes: { pizza: true } })).data.error, 'wrong_phase');
-  assert.equal((await cem('POST', `${r}/ideas`, { label: 'Tacos' })).data.error, 'wrong_phase');
-
-  // ungültige Ranglisten
-  for (const body of [
-    { ranking: ['pizza', 'thai'] },
-    { ranking: ['pizza', 'thai', 'thai'] },
-    { ranking: ['pizza', 'thai', 'sushi'] },
-    { ranking: ['pizza', 'thai', 'c1'], veto: 'sushi' },
-    { ranking: 'pizza' },
-  ]) {
-    assert.equal((await anna('PUT', `${r}/ranking`, body)).status, 400, JSON.stringify(body));
-  }
-
-  await anna('PUT', `${r}/ranking`, { ranking: ['thai', 'c1', 'pizza'], veto: 'pizza' });
-  s = (await ben('PUT', `${r}/ranking`, { ranking: ['c1', 'thai', 'pizza'] })).data;
-  assert.equal(s.phase, 'rank');
-  s = (await cem('PUT', `${r}/ranking`, { ranking: ['thai', 'pizza', 'c1'], veto: 'c1' })).data;
   assert.equal(s.phase, 'done');
+  const p = s.result.profile;
+  assert.equal(p.n, 3);
+  assert.deepEqual(p.wishes, [{ text: 'Pizza', name: 'Anna' }]);
+  assert.deepEqual(p.top, [['frisch', 3], ['cremig', 1], ['herzhaft', 1]]);
+  assert.deepEqual(p.must, [{ key: 'frisch', name: 'Ben' }]);
+  assert.equal(p.spice, 'wahl');
+  assert.equal(p.temp, 'heiss');
+  assert.equal(p.vegetarian, 1);
+  assert.equal(p.budget, 15);
+  assert.deepEqual(p.nogo, ['pilze']);
+  assert.deepEqual(p.nogoCustom, ['Sushi']);
 
-  // Thai: 2 + 1 + 2 Punkte, kein Veto → gewinnt. Ramen (3) und Pizza (1) haben je ein Veto.
-  assert.deepEqual(
-    s.result.order.map((o) => [o.key, o.score, o.vetoes]),
-    [['thai', 5, []], ['c1', 3, ['Cem']], ['pizza', 1, ['Anna']]],
-  );
-  assert.equal(s.result.tie, false);
-  assert.equal(s.result.perfect, false);
-  assert.deepEqual(s.notes, [{ name: 'Anna', note: 'Keine  Pilze' }]);
+  const prompt = s.result.prompt;
+  for (const part of [
+    'in Kreuzberg, Oranienstraße', '"Pizza" (Anna)', 'Frisch 3, Cremig 1, Herzhaft 1', 'Frisch (Ben)',
+    'mindestens eine milde Variante', 'Temperatur: heiß', '1 von 3 essen vegetarisch', 'Pilze, "Sushi"',
+    'höchstens 15 €', 'genau 3 Restaurants', 'genau 3 Gerichte', 'No-Gos sind tabu', 'Schreibe alle Texte auf Deutsch',
+  ]) assert.ok(prompt.includes(part), `fehlt im Prompt: ${part}`);
+
+  // Sprache der Antwort folgt der Oberfläche
+  const es = (await ben('GET', `${r}/state?lang=es`)).data.result.prompt;
+  assert.ok(es.includes('Schreibe alle Texte auf Spanisch'));
+  assert.ok((await ben('GET', `${r}/state?lang=xx`)).data.result.prompt.includes('auf Deutsch'));
+
+  assert.equal((await cem('PUT', `${r}/vote`, { vote: vote() })).data.error, 'wrong_phase');
 
   const row = (await admin('GET', '/api/admin/rounds')).data.rounds.find((x) => x.token === round.token);
   assert.equal(row.phase, 'done');
   assert.equal(row.done, 3);
-  assert.deepEqual(row.winner, { key: 'thai', label: null });
+  assert.equal(row.location, 'Kreuzberg, Oranienstraße');
 
   // Cookie einer Runde gilt nicht für eine andere
   const other = await newRound();
@@ -241,33 +240,6 @@ test('Kompletter Ablauf: Swipen, Match, Endrunde mit Veto, Ergebnis', async () =
   assert.equal((await anna('GET', `${r}/state`)).status, 404);
 });
 
-test('Kein Match: neue Swipe-Runde, eigene Ideen bleiben, dann Perfect Match', async () => {
-  const round = await newRound({ size: 2 });
-  const r = `/api/r/${round.token}`;
-  const a = await joinAs(round, 'A');
-  const b = await joinAs(round, 'B');
-
-  for (const label of ['Ramen', 'Poke', 'Tacos']) assert.equal((await a('POST', `${r}/ideas`, { label })).status, 200);
-  assert.equal((await a('POST', `${r}/ideas`, { label: 'Pho' })).data.error, 'idea_limit');
-
-  await swipe(a, round, ['pizza', 'c1', 'c2', 'c3']);
-  let s = await swipe(b, round, ['burger']);
-  assert.equal(s.phase, 'swipe');
-  assert.equal(s.swipeRound, 2);
-  assert.equal(s.me.swipes, null);
-  assert.equal(s.prev.voters, 2);
-  assert.equal(s.prev.tally.pizza, 1);
-  assert.equal(s.prev.tally.burger, 1);
-  assert.equal(s.prev.tally.pasta, 0);
-  assert.deepEqual((await a('GET', `${r}/state`)).data.me.swipes, { c1: 1, c2: 1, c3: 1 });
-
-  await swipe(a, round, ['sushi', 'c1']);
-  s = await swipe(b, round, ['sushi']);
-  assert.equal(s.phase, 'done');
-  assert.equal(s.result.perfect, true);
-  assert.equal(s.result.order[0].key, 'sushi');
-});
-
 test('Nicht mehr warten: Wer fehlt, wird übersprungen', async () => {
   const round = await newRound({ size: 4 });
   const r = `/api/r/${round.token}`;
@@ -275,34 +247,20 @@ test('Nicht mehr warten: Wer fehlt, wird übersprungen', async () => {
   const b = await joinAs(round, 'B');
   const c = await joinAs(round, 'C');
 
-  await swipe(a, round, ['pizza', 'thai']);
+  await castVote(a, round, { wish: 'Ramen' });
   assert.equal((await a('POST', `${r}/skip`)).data.error, 'skip'); // erst eine Person fertig
-  await swipe(b, round, ['pizza', 'thai', 'sushi']);
+  await castVote(b, round, { tastes: { frisch: 1 } });
   assert.equal((await c('POST', `${r}/skip`)).data.error, 'skip'); // C ist selbst nicht fertig
 
   const s = (await a('POST', `${r}/skip`)).data;
-  assert.equal(s.phase, 'rank');
+  assert.equal(s.phase, 'done');
   assert.equal(s.size, 2);
-  assert.deepEqual(s.shortlist, ['pizza', 'thai']);
+  assert.equal(s.result.profile.n, 2);
   assert.deepEqual(s.people.map((p) => [p.name, p.active]), [['A', true], ['B', true], ['C', false]]);
 
   assert.equal((await c('GET', `${r}/state`)).data.me.active, false);
-  assert.equal((await c('PUT', `${r}/ranking`, { ranking: ['pizza', 'thai'] })).data.error, 'excluded');
+  assert.equal((await c('PUT', `${r}/vote`, { vote: vote() })).data.error, 'excluded');
   assert.equal((await client()('POST', `${r}/join`, { pin: round.pin, name: 'D' })).data.error, 'full');
-});
-
-test('Gleichstand wird für alle gleich entschieden', async () => {
-  const round = await newRound({ size: 2 });
-  const r = `/api/r/${round.token}`;
-  const a = await joinAs(round, 'A');
-  const b = await joinAs(round, 'B');
-  await swipe(a, round, ['pizza', 'thai']);
-  await swipe(b, round, ['pizza', 'thai']);
-  await a('PUT', `${r}/ranking`, { ranking: ['pizza', 'thai'] });
-  const sb = (await b('PUT', `${r}/ranking`, { ranking: ['thai', 'pizza'] })).data;
-  const sa = (await a('GET', `${r}/state`)).data;
-  assert.equal(sb.result.tie, true);
-  assert.deepEqual(sa.result.order.map((o) => o.key), sb.result.order.map((o) => o.key));
 });
 
 test('PIN-Sperre hält auch bei parallelen Versuchen', async () => {

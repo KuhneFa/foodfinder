@@ -1,12 +1,14 @@
 # 🍽️ Foodfinder
 
-Swipen. Matchen. Essen. In einer Minute herausfinden, worauf die ganze Gruppe Bock hat.
+Sag, worauf du Bock hast. Den Rest machen wir. Foodfinder nimmt einer Gruppe die Essensentscheidung ab.
 
-1. Du legst unter `/admin` eine **Runde** an, gibst an, **wie viele ihr seid**, und bekommst einen geheimen Link und eine 6-stellige PIN. Teilen geht über das Teilen-Menü des Handys (z. B. WhatsApp).
-2. Jede Person gibt PIN und Namen ein und **swipt durch 15 Küchen**: rechts = Bock, links = nö. Am Ende kann man bis zu 3 eigene Ideen einbringen, die dann alle anderen auch swipen, und eine Notiz (Allergien, No-Gos) hinterlassen.
-3. Sobald alle fertig sind, gibt es die **Matches**: Küchen, auf die *alle* Bock haben. Gibt es keins, startet eine neue Swipe-Runde, und es wird angezeigt, was knapp war. Bei genau einem Match steht das Ergebnis sofort fest.
-4. In der **Endrunde** sortiert jede Person die Matches. Jede Person hat **ein Veto**: Was vetoiert wird, kann nicht gewinnen.
-5. **Ergebnis:** Der Gewinner wird groß angezeigt, dazu Plan B und C. Dann gibt man noch den Ort ein („📍 Wo seid ihr?“, bleibt nur im Browser) und kopiert einen fertigen **KI-Prompt** in Claude oder ChatGPT. Er fragt nach Restaurants in der Nähe, die gerade liefern, und nach schnellen Rezepten zum Selberkochen.
+1. Du legst unter `/admin` eine **Runde** an: **Ort** (landet im Prompt), wie viele ihr seid, optional ein Titel. Du bekommst einen geheimen Link und eine 6-stellige PIN. Teilen geht über das Teilen-Menü des Handys (z. B. WhatsApp).
+2. Jede Person gibt PIN und Namen ein und wird gefragt: **„Weißt du schon, worauf du Bock hast?“**
+   - **Ja:** Wunsch eintippen oder antippen (z. B. „Pizza“). Geschmacksfragen entfallen dann.
+   - **Nein, hilf mir:** 6 Entweder-oder-Duelle im Vollbild (Heiß/Kalt, Scharf/Mild, Frisch/Deftig, Fruchtig/Herzhaft, Knusprig/Cremig, Veggie/Fleisch).
+3. **„Passt das so?“:** Übersicht der eigenen Stimme zum Nachschärfen: Geschmack (gern oder muss), Schärfe, Temperatur, Ernährung, Budget pro Person und No-Gos (auch als Freitext). Mit Wunsch gibt es nur Ernährung, Budget und No-Gos.
+4. Jede Stimme ist **geheim**. Sobald alle abgestimmt haben, wird daraus das **Gruppenprofil**: Wünsche, gewichteter Geschmack, Schärfe (will jemand mild, muss sie wählbar sein), Temperatur (Mehrheit), Ernährung, das niedrigste Budget und alle No-Gos.
+5. **Ergebnis:** Alle sehen das Profil und den **Masterprompt** zum Kopieren. In Claude eingefügt, liefert er 3 Restaurants in der Nähe mit je 3 Gerichten, als JSON.
 
 Die Seite aktualisiert sich während des Wartens selbst. Hängt jemand, kann man nach 20 Sekunden ohne diese Person weitermachen.
 
@@ -56,26 +58,30 @@ Die CI (GitHub Actions) führt die Tests bei jedem Push aus, einmal direkt und e
 
 ### Grenzen
 
-2–10 Personen pro Runde, 3 eigene Ideen pro Person (10 pro Runde), 200 Runden insgesamt.
+2–10 Personen pro Runde, 5 eigene No-Gos pro Person, 200 Runden insgesamt.
 
-## Fotos
+## Masterprompt und KI
 
-Jede Küche zeigt das Foto `public/img/<küche>.jpg` (z. B. `public/img/thai.jpg`, Hochformat 2:3, z. B. 720×1080). Die Namen stehen in `FOODS` in `public/common.js`. Fehlt ein Foto, zeigt die Karte stattdessen ein großes Emoji. Nach dem Austauschen von Fotos den Server neu starten. Bildnachweise stehen in [CREDITS.md](CREDITS.md).
+- Der Prompt entsteht in `prompt.js` aus dem Gruppenprofil (`aggregate`) und wird mit `buildPrompt` zusammengesetzt. Bei Konflikten gilt: No-Gos vor Budget vor Ernährung vor Wünschen vor Geschmack. Freitext steht in Anführungszeichen und gilt ausdrücklich nicht als Anweisung.
+- Die Antwortsprache folgt der Sprache der Oberfläche.
+- `test/prompt.test.js` testet Profil und Prompt ohne Server. Dort lassen sich Prompt-Änderungen schnell absichern.
+- **Noch ruft Foodfinder kein Sprachmodell auf.** `llm.js` bereitet die Anbindung vor: Anbieter Claude (Standard, `claude-opus-5-5`), ChatGPT und Gemini; Auswahl per `LLM_PROVIDER`. Zum Anbinden dort `generate()` umsetzen.
 
 ## Aufbau
 
 ```
 server.js        HTTP-Server, API, Sicherheit (nur Node-Bordmittel)
-db.js            SQLite-Schema (node:sqlite)
+db.js            SQLite-Schema (node:sqlite) und Migration älterer Datenbanken
+prompt.js        Gruppenprofil und Masterprompt
+llm.js           vorbereitete KI-Anbindung (noch ohne Aufruf)
 public/
-  common.js      Übersetzungen, Theme, Hilfsfunktionen
-  round.js       Teilnehmerseite: Beitreten, Swipen, Endrunde, Ergebnis, KI-Prompt
+  common.js      Übersetzungen, Auswahl, Theme, Hilfsfunktionen
+  round.js       Teilnehmerseite: Beitreten, Wunsch, Duelle, Übersicht, Warten, Ergebnis
   admin.js       Verwaltung
   *.html, style.css
-  img/           Fotos der Küchen
-test/            API-Tests (node:test)
+test/            API-, Prompt- und Übersetzungstests (node:test)
 Dockerfile       für Railway
 .github/         CI-Workflow
 ```
 
-Umgebungsvariablen: `ADMIN_PASSWORD` (Pflicht), `PORT` (setzt Railway), `DATA_DIR` (Standard im Container: `/data`), `TRUST_PROXY=1` (wird auf Railway automatisch erkannt).
+Umgebungsvariablen: `ADMIN_PASSWORD` (Pflicht), `PORT` (setzt Railway), `DATA_DIR` (Standard im Container: `/data`), `TRUST_PROXY=1` (wird auf Railway automatisch erkannt), `TIMEZONE` (für die Uhrzeit im Prompt, Standard `Europe/Berlin`), `LLM_PROVIDER` (`claude`, `chatgpt` oder `gemini`, Standard `claude`).

@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { TASTE_KEYS, NOGO_KEYS } from '../prompt.js';
 
 const code = readFileSync(new URL('../public/common.js', import.meta.url), 'utf8');
 const ctx = {
@@ -12,8 +13,8 @@ const ctx = {
   localStorage: { getItem: () => null, setItem: () => {} },
   document: { documentElement: { dataset: {} }, addEventListener: () => {} },
 };
-vm.runInNewContext(`${code}\nglobalThis.__out = { I18N, LANGS, FOODS };`, ctx);
-const { I18N, LANGS, FOODS } = ctx.__out;
+vm.runInNewContext(`${code}\nglobalThis.__out = { I18N, LANGS, TASTES, NOGOS };`, ctx);
+const { I18N, LANGS, TASTES, NOGOS } = ctx.__out;
 
 const placeholders = (s) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 
@@ -21,11 +22,12 @@ test('Sprachauswahl und Übersetzungen passen zusammen', () => {
   assert.deepEqual(Object.keys(LANGS).sort(), Object.keys(I18N).sort());
 });
 
-test('Küchen in Browser und Server stimmen überein', () => {
-  const server = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
-  const keys = [...server.match(/const FOOD_KEYS = \[([^\]]*)\]/)[1].matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
-  assert.deepEqual(Array.from(FOODS, (f) => f.k), keys); // Array.from: Array aus diesem Kontext, nicht aus der Sandbox
-  for (const f of FOODS) assert.ok(I18N.de[`food_${f.k}`], `food_${f.k} fehlt`);
+test('Auswahl in Browser und Server stimmt überein', () => {
+  // Array.from: Arrays aus diesem Kontext, nicht aus der Sandbox
+  assert.deepEqual(Array.from(TASTES, (x) => x.k), TASTE_KEYS);
+  assert.deepEqual(Array.from(NOGOS), NOGO_KEYS);
+  for (const k of TASTE_KEYS) assert.ok(I18N.de[`taste_${k}`], `taste_${k} fehlt`);
+  for (const k of NOGO_KEYS) assert.ok(I18N.de[`nogo_${k}`], `nogo_${k} fehlt`);
 });
 
 for (const lang of Object.keys(I18N)) {
