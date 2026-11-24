@@ -160,9 +160,6 @@ $('#help-me').addEventListener('click', () => {
 function duelHead(ink) {
   $('#v-duel').style.setProperty('--head', ink);
   $('#segs').replaceChildren(...PAIRS.map((_, i) => h('i', { class: i < V.i ? 'done' : '' })));
-  $('#mini').replaceChildren(...S.people.filter((p) => !p.me && p.active).map((p) => h('span', {
-    class: p.done ? 'done' : '', text: p.name.slice(0, 1).toUpperCase(), title: p.name,
-  })));
 }
 
 function pairEl(pair) {

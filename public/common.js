@@ -19,6 +19,7 @@ const I18N = {
   de: {
     app_name: 'Foodfinder',
     theme: 'Hell/Dunkel',
+    language: 'Sprache',
     loading: 'Lädt …',
     tagline: 'Sag, worauf du Bock hast. Den Rest machen wir.',
     index_text: 'Foodfinder nimmt eurer Gruppe die Essensentscheidung ab. Zum Mitmachen brauchst du einen Einladungslink.',
@@ -191,6 +192,7 @@ const I18N = {
   en: {
     app_name: 'Foodfinder',
     theme: 'Light/Dark',
+    language: 'Language',
     loading: 'Loading…',
     tagline: 'Say what you’re craving. We’ll handle the rest.',
     index_text: 'Foodfinder takes the “what do we eat?” decision off your group’s hands. You need an invite link to join.',
@@ -363,6 +365,7 @@ const I18N = {
   es: {
     app_name: 'Foodfinder',
     theme: 'Claro/Oscuro',
+    language: 'Idioma',
     loading: 'Cargando…',
     tagline: 'Di qué te apetece. Del resto nos encargamos.',
     index_text: 'Foodfinder decide por vuestro grupo qué comer. Para participar necesitas un enlace de invitación.',
@@ -535,6 +538,7 @@ const I18N = {
   ca: {
     app_name: 'Foodfinder',
     theme: 'Clar/Fosc',
+    language: 'Idioma',
     loading: 'Carregant…',
     tagline: 'Digues què et ve de gust. De la resta ens n’encarreguem.',
     index_text: 'Foodfinder decideix pel vostre grup què menjar. Per participar necessites un enllaç d’invitació.',
@@ -707,6 +711,7 @@ const I18N = {
   ro: {
     app_name: 'Foodfinder',
     theme: 'Luminos/Întunecat',
+    language: 'Limbă',
     loading: 'Se încarcă…',
     tagline: 'Spune ce poftă ai. Restul îl facem noi.',
     index_text: 'Foodfinder decide pentru grupul vostru ce mâncați. Ca să participi ai nevoie de un link de invitație.',
@@ -1000,18 +1005,54 @@ function toggleTheme() {
   store.set('ff_theme', root.dataset.theme);
 }
 
+// ---------- Sprache & Theme: schwebende Steuerung oben rechts, auf jedem Bildschirm ----------
+const LANG_CODES = { de: 'DE', en: 'EN', es: 'ES', ca: 'CA', ro: 'RO' };
+const GLOBE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg>';
+
+function setLang(code) {
+  if (!I18N[code] || code === lang) return;
+  lang = code;
+  store.set('ff_lang', lang);
+  applyI18n();
+  document.dispatchEvent(new Event('langchange'));
+}
+
+function buildControls() {
+  const btn = h('button', { class: 'ctl-btn', id: 'lang-btn', type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false' });
+  const menu = h('div', { class: 'lang-menu', role: 'menu', hidden: true });
+  const theme = h('button', { class: 'ctl-btn icon-only', id: 'theme', type: 'button', 'data-i18n-aria': 'theme', text: '◐', onclick: toggleTheme });
+  const wrap = h('div', { class: 'ctl' }, theme, h('div', { class: 'lang-wrap' }, btn, menu));
+
+  const render = () => {
+    btn.innerHTML = GLOBE;
+    btn.append(h('span', { text: LANG_CODES[lang] }));
+    btn.setAttribute('aria-label', `${t('language')}: ${LANGS[lang]}`);
+    menu.replaceChildren(...Object.entries(LANGS).map(([code, label]) => h('button', {
+      class: 'lang-item', type: 'button', role: 'menuitemradio', 'aria-checked': String(code === lang), lang: code,
+      onclick: () => { close(); setLang(code); },
+    }, h('span', { text: label }), h('span', { class: 'code', text: LANG_CODES[code] }))));
+  };
+  const open = () => {
+    render();
+    menu.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    menu.querySelector('[aria-checked="true"]')?.focus();
+  };
+  const close = (focus) => {
+    if (menu.hidden) return;
+    menu.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+    if (focus) btn.focus();
+  };
+  btn.addEventListener('click', () => (menu.hidden ? open() : close()));
+  document.addEventListener('click', (e) => { if (!wrap.contains(e.target)) close(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(true); });
+  document.addEventListener('langchange', render);
+  render();
+  document.body.append(wrap);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
-  const sel = $('#lang');
-  if (sel) {
-    for (const [k, v] of Object.entries(LANGS)) sel.append(h('option', { value: k, text: v }));
-    sel.value = lang;
-    sel.addEventListener('change', () => {
-      lang = sel.value;
-      store.set('ff_lang', lang);
-      applyI18n();
-      document.dispatchEvent(new Event('langchange'));
-    });
-  }
-  $('#theme')?.addEventListener('click', toggleTheme);
+  buildControls();
   applyI18n();
 });
