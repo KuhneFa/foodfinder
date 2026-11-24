@@ -39,103 +39,67 @@
         <input id="name" maxlength="30" required autocomplete="given-name">
       </label>
       <p id="join-error" class="error" role="alert"></p>
-      <button type="submit" class="primary" data-i18n="join_btn"></button>
+      <button type="submit" class="btn accent" data-i18n="join_btn"></button>
     </form>
   </section>
 
-  <section id="v-swipe" class="swipe" hidden>
-    <div class="swipe-top">
-      <span id="swipe-label" class="eyebrow"></span>
-      <span id="swipe-progress" class="progress"></span>
-    </div>
-    <div id="deck" class="deck"></div>
-    <p class="hint muted" data-i18n="swipe_hint"></p>
-    <div class="swipe-actions">
-      <button id="btn-undo" type="button" class="round-btn small" data-i18n-aria="undo">↶</button>
-      <button id="btn-no" type="button" class="round-btn no" data-i18n-aria="swipe_no">✕</button>
-      <button id="btn-yes" type="button" class="round-btn yes" data-i18n-aria="swipe_yes">♥</button>
+  <section id="v-start" class="screen" hidden>
+    <p class="eyebrow" id="start-ey"></p>
+    <h1 data-i18n="start_title"></h1>
+    <input id="wish" class="wish" type="text" maxlength="40" autocomplete="off" data-i18n-ph="wish_ph" data-i18n-aria="sec_wish">
+    <div class="quick" id="quick"></div>
+    <div class="btns">
+      <button id="wish-go" type="button" class="btn" disabled data-i18n="wish_go"></button>
+      <button id="help-me" type="button" class="btn accent" data-i18n="help_me"></button>
     </div>
   </section>
 
-  <section id="v-summary" hidden>
-    <h1 data-i18n="summary_title"></h1>
-    <p class="muted" data-i18n="summary_yes"></p>
-    <div id="yes-chips" class="chips"></div>
-    <form id="idea-form" class="field">
-      <label for="idea-input" class="lbl" data-i18n="idea_label"></label>
-      <div class="row">
-        <input id="idea-input" maxlength="40" data-i18n-ph="idea_ph">
-        <button type="submit" data-i18n="add"></button>
-      </div>
-    </form>
-    <div class="field">
-      <label for="note" class="lbl" data-i18n="note_label"></label>
-      <textarea id="note" maxlength="300" rows="2" data-i18n-ph="note_ph"></textarea>
-    </div>
-    <p id="summary-error" class="error" role="alert"></p>
-    <div class="row">
-      <button id="summary-undo" type="button" data-i18n="undo"></button>
-      <button id="submit-swipes" type="button" class="primary grow" data-i18n="submit"></button>
+  <section id="v-duel" class="duel" hidden>
+    <div class="d-stage" id="d-stage"></div>
+    <div class="d-head gutter">
+      <div class="segs" id="segs"></div>
+      <div class="mini" id="mini"></div>
     </div>
   </section>
+
+  <section id="v-over" hidden></section>
 
   <section id="v-wait" hidden>
-    <p class="big-emoji"><span class="pulse" aria-hidden="true">⏳</span></p>
+    <p class="eyebrow" data-i18n="wait_eyebrow"></p>
     <h1 data-i18n="wait_title"></h1>
-    <p id="wait-text" class="lead muted"></p>
-    <p id="wait-excluded" class="note-box" data-i18n="err_excluded" hidden></p>
-    <ul id="people" class="people"></ul>
-    <button id="skip" type="button" class="wide" data-i18n="skip_btn" hidden></button>
-  </section>
-
-  <section id="v-nomatch" hidden>
-    <h1 data-i18n="nomatch_title"></h1>
-    <p class="lead" data-i18n="nomatch_text"></p>
-    <div id="close-wrap" hidden>
-      <p class="muted" data-i18n="nomatch_close"></p>
-      <div id="close-chips" class="chips"></div>
+    <p class="lead muted" id="wait-text"></p>
+    <ul class="people" id="people"></ul>
+    <p id="share-hint" class="muted small" role="status" hidden></p>
+    <div class="btns">
+      <button id="skip" type="button" class="btn ghost" data-i18n="skip_btn" hidden></button>
+      <button id="change" type="button" class="link" data-i18n="change_vote" hidden></button>
     </div>
-    <button id="again" type="button" class="primary wide" data-i18n="again_btn"></button>
   </section>
 
-  <section id="v-rank" hidden>
-    <h1 class="accent-text" data-i18n="match_title"></h1>
-    <p class="lead" data-i18n="match_text"></p>
-    <ol id="rank-list" class="rank"></ol>
-    <p class="muted small" data-i18n="veto_hint"></p>
-    <p id="rank-error" class="error" role="alert"></p>
-    <button id="submit-rank" type="button" class="primary wide" data-i18n="submit"></button>
+  <section id="v-flash" class="flash" hidden>
+    <strong data-i18n="match_flash"></strong>
+    <span data-i18n="match_sub"></span>
   </section>
 
   <section id="v-result" hidden>
-    <p class="kicker" data-i18n="result_title"></p>
-    <div id="winner" class="result-card"></div>
-    <p id="result-note" class="center muted"></p>
-    <ul id="plans" class="plans"></ul>
-
+    <p class="eyebrow" data-i18n="res_eyebrow"></p>
+    <div class="pwords" id="pwords"></div>
+    <p class="wishline" id="r-wishes" hidden></p>
+    <p class="wishline" id="r-nogo" hidden></p>
     <div class="panel">
       <h2 data-i18n="ai_title"></h2>
       <p class="muted" data-i18n="ai_text"></p>
-      <div class="field">
-        <label for="place" class="lbl" data-i18n="location_label"></label>
-        <input id="place" maxlength="80" data-i18n-ph="location_ph" autocomplete="address-level2">
+      <div class="seg" id="providers" role="group"></div>
+      <div class="row">
+        <button id="copy-prompt" type="button" class="btn accent" data-i18n="copy_prompt"></button>
+        <button id="send-ai" type="button" class="btn ghost" disabled></button>
       </div>
-      <button id="copy-prompt" type="button" class="primary wide" data-i18n="copy_prompt"></button>
+      <p class="muted small" data-i18n="ai_soon"></p>
       <details class="fold">
         <summary data-i18n="show_prompt"></summary>
-        <pre id="md" class="md"></pre>
-        <button id="dl-md" type="button" class="link" data-i18n="download"></button>
+        <pre id="prompt" class="md"></pre>
       </details>
     </div>
-
-    <details id="details-wrap" class="fold">
-      <summary data-i18n="details"></summary>
-      <ul id="details" class="plain"></ul>
-      <div id="notes-wrap" hidden>
-        <h3 data-i18n="notes"></h3>
-        <ul id="notes" class="plain"></ul>
-      </div>
-    </details>
   </section>
 </main>
 </body>

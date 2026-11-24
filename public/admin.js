@@ -11,16 +11,7 @@ function show(id) {
 
 const roundLink = (tok) => `${location.origin}/r/${tok}`;
 const fmtDate = (ts) => new Intl.DateTimeFormat(lang, { dateStyle: 'medium' }).format(ts);
-
-function winnerText(w) {
-  if (!w) return '';
-  const f = food(w.key);
-  return f ? `${f.e} ${t(`food_${w.key}`)}` : `💡 ${w.label}`;
-}
-function phaseText(r) {
-  if (r.phase === 'done') return t('ph_done', { winner: winnerText(r.winner) });
-  return t(r.phase === 'rank' ? 'ph_rank' : 'ph_swipe', { done: r.done, size: r.size });
-}
+const phaseText = (r) => (r.phase === 'done' ? t('ph_done') : t('ph_vote', { done: r.done, size: r.size }));
 
 async function load() {
   try {
@@ -66,13 +57,18 @@ $('#size-minus').addEventListener('click', () => { size = Math.max(2, size - 1);
 $('#size-plus').addEventListener('click', () => { size = Math.min(10, size + 1); renderSize(); });
 renderSize();
 
+// Der Ort bleibt für die nächste Runde vorausgefüllt
+$('#round-location').value = store.get('ff_location') || '';
+
 $('#create-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const btn = ev.submitter;
   btn.disabled = true;
   $('#create-error').textContent = '';
+  const location = $('#round-location').value.trim();
   try {
-    created = await api('POST', '/api/admin/rounds', { title: $('#round-title').value, size });
+    created = await api('POST', '/api/admin/rounds', { title: $('#round-title').value, location, size });
+    store.set('ff_location', location);
     $('#round-title').value = '';
     renderCreated();
     await load();
@@ -109,18 +105,18 @@ function renderRounds() {
     return;
   }
   ul.replaceChildren(...rounds.map((r) => {
-    const title = r.title || t('app_name');
+    const title = r.title || r.location || t('app_name');
     const hint = h('p', { class: 'muted small', role: 'status', hidden: true });
     return h('li', {},
       h('strong', { text: title }),
-      h('p', { class: 'small', text: phaseText(r) }),
+      h('p', { class: 'small', text: `${phaseText(r)}${r.location && r.title ? ` · 📍 ${r.location}` : ''}` }),
       h('p', { class: 'muted small', text: `${fmtDate(r.created_at)} · ${t('expires', { date: fmtDate(r.expires_at) })}` }),
       newPins[r.id] ? h('p', { class: 'pin-out', text: t('new_pin_done', { pin: newPins[r.id] }) }) : null,
       h('div', { class: 'row' },
-        h('a', { class: 'btn', href: roundLink(r.token), target: '_blank', rel: 'noopener', text: '↗' }),
-        h('button', { type: 'button', text: t('share'), onclick: () => shareMessage(t('share_text', { link: roundLink(r.token) }), hint) }),
-        h('button', { type: 'button', text: t('new_pin'), onclick: () => resetPin(r) }),
-        h('button', { type: 'button', text: t('delete'), onclick: () => removeRound(r, title) }),
+        h('a', { class: 'btn ghost', href: roundLink(r.token), target: '_blank', rel: 'noopener', text: '↗' }),
+        h('button', { type: 'button', class: 'ghost', text: t('share'), onclick: () => shareMessage(t('share_text', { link: roundLink(r.token) }), hint) }),
+        h('button', { type: 'button', class: 'ghost', text: t('new_pin'), onclick: () => resetPin(r) }),
+        h('button', { type: 'button', class: 'ghost', text: t('delete'), onclick: () => removeRound(r, title) }),
       ),
       hint,
     );
